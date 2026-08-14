@@ -1,6 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 
 export const authConfig = {
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "campus-runner-secret-key-32chars-long!",
   providers: [],
   session: {
     strategy: "jwt",
@@ -55,5 +56,6 @@ export const authConfig = {
   },
   pages: {
     signIn: "/login",
+    error: "/login",
   },
 } satisfies NextAuthConfig;

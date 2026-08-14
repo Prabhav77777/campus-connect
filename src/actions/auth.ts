@@ -25,6 +25,8 @@ export async function signUp(data: FormData | { name?: string; email?: string; p
       roomNumber = data.roomNumber || '';
     }
 
+    email = email.trim().toLowerCase();
+
     if (!name || !email || !password || !hostel) {
       return { error: 'Missing required fields' };
     }
