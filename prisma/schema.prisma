@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  hostel       String
+  roomNumber   String?
+  trustScore   Int      @default(0)
+  role         String   @default("STUDENT")
+  redFlagged   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  trips         Trip[]
+  requests      Request[]
+  notifications Notification[]
+}
+
+model Outlet {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  hasFixedMenu Boolean   @default(true)
+  isClosed     Boolean   @default(false)
+
+  menuItems MenuItem[]
+  trips     Trip[]
+  requests  Request[]
+}
+
+model MenuItem {
+  id       String @id @default(cuid())
+  outletId String
+  name     String
+  price    Float
+
+  outlet Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+}
+
+model Trip {
+  id          String   @id @default(cuid())
+  userId      String
+  outletId    String
+  leavingTime DateTime
+  status      String   @default("ACTIVE")
+  capacity    Int?
+  createdAt   DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  outlet  Outlet  @relation(fields: [outletId], references: [id])
+  matches Match[]
+}
+
+model Request {
+  id              String   @id @default(cuid())
+  userId          String
+  outletId        String
+  itemName        String
+  quantity        Int      @default(1)
+  priceEstimate   Float
+  deliverToHostel String
+  deliverToRoom   String?
+  note            String?
+  status          String   @default("OPEN")
+  createdAt       DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  outlet  Outlet  @relation(fields: [outletId], references: [id])
+  matches Match[]
+}
+
+model Match {
+  id        String   @id @default(cuid())
+  tripId    String
+  requestId String
+  otp       String?
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+
+  trip    Trip    @relation(fields: [tripId], references: [id])
+  request Request @relation(fields: [requestId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  message   String
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
