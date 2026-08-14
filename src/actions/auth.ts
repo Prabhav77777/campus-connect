@@ -1,10 +1,12 @@
 'use server';
 
-import { prisma } from '@/lib/db';
+import { prisma, ensureDbInitialized } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 
 export async function signUp(data: FormData | { name?: string; email?: string; password?: string; hostel?: string; roomNumber?: string }) {
   try {
+    await ensureDbInitialized();
+
     let name = '';
     let email = '';
     let password = '';
@@ -55,6 +57,6 @@ export async function signUp(data: FormData | { name?: string; email?: string; p
     return { success: true };
   } catch (error) {
     console.error('Error in signUp:', error);
-    return { error: 'Failed to create user' };
+    return { error: error instanceof Error ? error.message : 'Failed to create user' };
   }
 }

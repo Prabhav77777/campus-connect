@@ -1,8 +1,10 @@
-import { prisma } from "@/lib/db";
+import { prisma, ensureDbInitialized } from "@/lib/db";
 import { NextResponse } from "next/server";
 
 export async function GET() {
   try {
+    await ensureDbInitialized();
+
     const outlets = await prisma.outlet.findMany({
       where: { isClosed: false },
       include: {
