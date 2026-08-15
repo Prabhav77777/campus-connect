@@ -2,11 +2,9 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -19,7 +17,7 @@ export default function LoginPage() {
 
     try {
       const res = await signIn("credentials", {
-        email,
+        email: email.trim().toLowerCase(),
         password,
         redirect: false,
       });
@@ -30,21 +28,10 @@ export default function LoginPage() {
         return;
       }
 
-      // Check role
-      const roleRes = await fetch("/api/user-role");
-      if (roleRes.ok) {
-        const { role } = await roleRes.json();
-        if (role === "ADMIN") {
-          router.push("/admin");
-        } else {
-          router.push("/");
-        }
-      } else {
-        router.push("/");
-      }
-      
-    } catch (err) {
-      setError("An unexpected error occurred");
+      // Perform a full navigation so session cookie propagates to middleware & server components cleanly
+      window.location.href = "/";
+    } catch {
+      setError("An unexpected error occurred during sign in");
       setIsLoading(false);
     }
   };
@@ -62,7 +49,7 @@ export default function LoginPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1.5 text-[hsl(220,15%,25%)]" htmlFor="email">
-            Email address
+            College Email
           </label>
           <input
             id="email"

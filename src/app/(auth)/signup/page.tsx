@@ -1,13 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signUp } from "@/actions/auth";
 import { signIn } from "next-auth/react";
 
 export default function SignupPage() {
-  const router = useRouter();
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -39,12 +37,13 @@ export default function SignupPage() {
     }
 
     try {
+      const cleanEmail = formData.email.trim().toLowerCase();
       const res = await signUp({
-        name: formData.name,
-        email: formData.email,
+        name: formData.name.trim(),
+        email: cleanEmail,
         password: formData.password,
         hostel: formData.hostel,
-        roomNumber: formData.room,
+        roomNumber: formData.room.trim(),
       });
 
       if (res?.error) {
@@ -55,20 +54,18 @@ export default function SignupPage() {
 
       // Automatically sign in
       const signInRes = await signIn("credentials", {
-        email: formData.email,
+        email: cleanEmail,
         password: formData.password,
         redirect: false,
       });
 
       if (signInRes?.error) {
-        setError("Account created, but failed to log in automatically. Please sign in manually.");
-        setIsLoading(false);
-        router.push("/login");
+        window.location.href = "/login";
         return;
       }
 
-      router.push("/");
-    } catch (err) {
+      window.location.href = "/";
+    } catch {
       setError("An unexpected error occurred during signup");
       setIsLoading(false);
     }
