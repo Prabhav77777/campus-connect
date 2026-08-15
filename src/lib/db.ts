@@ -226,7 +226,7 @@ export async function ensureDbInitialized() {
 
     if (!existingAdmin) {
       const adminHash = await bcrypt.hash(adminPassword, 10);
-      await prisma.user.create({
+      const adminUser = await prisma.user.create({
         data: {
           name: "Admin",
           email: adminEmail,
@@ -235,6 +235,7 @@ export async function ensureDbInitialized() {
           role: "ADMIN",
         },
       });
+      await saveUserToCloud(adminUser);
     }
 
     // Seed outlets if empty
@@ -284,4 +285,66 @@ export async function ensureDbInitialized() {
   } catch (error) {
     console.error("Database init error:", error);
   }
+}
+
+export async function saveUserToCloud(user: {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  hostel: string;
+  roomNumber?: string | null;
+  role: string;
+}) {
+  try {
+    const key = `cr_user_${user.email.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    await fetch("https://api.restful-api.dev/objects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: key,
+        data: user,
+      }),
+    });
+  } catch (err) {
+    console.error("Cloud user backup error:", err);
+  }
+}
+
+export async function findUserWithCloudSync(email: string) {
+  const cleanEmail = email.trim().toLowerCase();
+  await ensureDbInitialized();
+
+  let user = await prisma.user.findUnique({ where: { email: cleanEmail } });
+  if (user) return user;
+
+  // Search cloud backup store if missing in current serverless container
+  try {
+    const key = `cr_user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    const res = await fetch(`https://api.restful-api.dev/objects`, { method: "GET" });
+    if (res.ok) {
+      const items = await res.json();
+      const match = Array.isArray(items) ? items.find((i: any) => i.name === key) : null;
+      if (match?.data) {
+        const u = match.data;
+        user = await prisma.user.upsert({
+          where: { email: cleanEmail },
+          update: {},
+          create: {
+            id: u.id || `usr_${Date.now()}`,
+            name: u.name,
+            email: u.email,
+            passwordHash: u.passwordHash,
+            hostel: u.hostel,
+            roomNumber: u.roomNumber || null,
+            role: u.role || "STUDENT",
+          },
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Cloud user restore error:", err);
+  }
+
+  return user;
 }

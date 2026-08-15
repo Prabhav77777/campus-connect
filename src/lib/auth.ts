@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { prisma, ensureDbInitialized } from "./db";
+import { prisma, ensureDbInitialized, findUserWithCloudSync } from "./db";
 import { authConfig } from "../auth.config";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -20,9 +20,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         try {
           await ensureDbInitialized();
 
-          const user = await prisma.user.findUnique({
-            where: { email: (credentials.email as string).trim().toLowerCase() },
-          });
+          const cleanEmail = (credentials.email as string).trim().toLowerCase();
+          const user = await findUserWithCloudSync(cleanEmail);
 
           if (!user) return null;
 

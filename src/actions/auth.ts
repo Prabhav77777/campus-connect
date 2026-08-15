@@ -1,6 +1,6 @@
 'use server';
 
-import { prisma, ensureDbInitialized } from '@/lib/db';
+import { prisma, ensureDbInitialized, saveUserToCloud, findUserWithCloudSync } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 
 export async function signUp(data: FormData | { name?: string; email?: string; password?: string; hostel?: string; roomNumber?: string }) {
@@ -33,9 +33,7 @@ export async function signUp(data: FormData | { name?: string; email?: string; p
       return { error: 'Missing required fields' };
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
+    const existingUser = await findUserWithCloudSync(email);
 
     if (existingUser) {
       return { error: 'User with this email already exists' };
@@ -43,7 +41,7 @@ export async function signUp(data: FormData | { name?: string; email?: string; p
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    await prisma.user.create({
+    const newUser = await prisma.user.create({
       data: {
         name,
         email,
@@ -53,6 +51,8 @@ export async function signUp(data: FormData | { name?: string; email?: string; p
         role: 'STUDENT',
       },
     });
+
+    await saveUserToCloud(newUser);
 
     return { success: true };
   } catch (error) {
