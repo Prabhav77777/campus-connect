@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
-import { PrismaLibSql } from "@prisma/adapter-libsql";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import bcrypt from "bcryptjs";
 
 const globalForPrisma = globalThis as unknown as {
@@ -8,17 +9,9 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function createPrismaClient() {
-  const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || "file:dev.db";
-
-  // Standard PostgreSQL (Vercel Postgres, Supabase, Neon)
-  if (dbUrl.startsWith("postgres://") || dbUrl.startsWith("postgresql://")) {
-    return new PrismaClient();
-  }
-
-  // libSQL / SQLite
-  const url = process.env.VERCEL && dbUrl.startsWith("file:") ? "file:/tmp/dev.db" : dbUrl;
-  const authToken = process.env.DATABASE_AUTH_TOKEN;
-  const adapter = new PrismaLibSql({ url, authToken });
+  const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || "postgresql://USER:PASSWORD@HOST:PORT/DATABASE";
+  const pool = new pg.Pool({ connectionString });
+  const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });
 }
 
@@ -29,204 +22,112 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 export async function ensureDbInitialized() {
   if (globalForPrisma.initialized) return;
 
+  const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || "";
+  if (!dbUrl || dbUrl.includes("USER:PASSWORD@HOST")) {
+    return;
+  }
+
   try {
-    const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || "";
-    const isPostgres = dbUrl.startsWith("postgres://") || dbUrl.startsWith("postgresql://");
+    // Create tables for Postgres if needed
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "User" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "email" TEXT NOT NULL UNIQUE,
+        "passwordHash" TEXT NOT NULL,
+        "hostel" TEXT NOT NULL,
+        "roomNumber" TEXT,
+        "trustScore" INTEGER NOT NULL DEFAULT 0,
+        "role" TEXT NOT NULL DEFAULT 'STUDENT',
+        "redFlagged" BOOLEAN NOT NULL DEFAULT false,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
-    if (isPostgres) {
-      // Create tables for Postgres if needed
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "User" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "name" TEXT NOT NULL,
-          "email" TEXT NOT NULL UNIQUE,
-          "passwordHash" TEXT NOT NULL,
-          "hostel" TEXT NOT NULL,
-          "roomNumber" TEXT,
-          "trustScore" INTEGER NOT NULL DEFAULT 0,
-          "role" TEXT NOT NULL DEFAULT 'STUDENT',
-          "redFlagged" BOOLEAN NOT NULL DEFAULT false,
-          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Outlet" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL UNIQUE,
+        "hasFixedMenu" BOOLEAN NOT NULL DEFAULT true,
+        "isClosed" BOOLEAN NOT NULL DEFAULT false
+      );
+    `);
 
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Outlet" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "name" TEXT NOT NULL UNIQUE,
-          "hasFixedMenu" BOOLEAN NOT NULL DEFAULT true,
-          "isClosed" BOOLEAN NOT NULL DEFAULT false
-        );
-      `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "MenuItem" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "outletId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "price" DOUBLE PRECISION NOT NULL,
+        CONSTRAINT "MenuItem_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+    `);
 
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "MenuItem" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "outletId" TEXT NOT NULL,
-          "name" TEXT NOT NULL,
-          "price" DOUBLE PRECISION NOT NULL,
-          CONSTRAINT "MenuItem_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE CASCADE ON UPDATE CASCADE
-        );
-      `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Trip" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "userId" TEXT NOT NULL,
+        "outletId" TEXT NOT NULL,
+        "leavingTime" TIMESTAMP(3) NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+        "capacity" INTEGER,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "Trip_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        CONSTRAINT "Trip_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+    `);
 
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Trip" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "outletId" TEXT NOT NULL,
-          "leavingTime" TIMESTAMP(3) NOT NULL,
-          "status" TEXT NOT NULL DEFAULT 'ACTIVE',
-          "capacity" INTEGER,
-          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT "Trip_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-          CONSTRAINT "Trip_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
-        );
-      `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Request" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "userId" TEXT NOT NULL,
+        "outletId" TEXT NOT NULL,
+        "itemName" TEXT NOT NULL,
+        "quantity" INTEGER NOT NULL DEFAULT 1,
+        "priceEstimate" DOUBLE PRECISION NOT NULL,
+        "deliverToHostel" TEXT NOT NULL,
+        "deliverToRoom" TEXT,
+        "note" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'OPEN',
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "Request_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        CONSTRAINT "Request_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+    `);
 
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Request" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "outletId" TEXT NOT NULL,
-          "itemName" TEXT NOT NULL,
-          "quantity" INTEGER NOT NULL DEFAULT 1,
-          "priceEstimate" DOUBLE PRECISION NOT NULL,
-          "deliverToHostel" TEXT NOT NULL,
-          "deliverToRoom" TEXT,
-          "note" TEXT,
-          "status" TEXT NOT NULL DEFAULT 'OPEN',
-          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT "Request_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-          CONSTRAINT "Request_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
-        );
-      `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Match" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "tripId" TEXT NOT NULL,
+        "requestId" TEXT NOT NULL,
+        "otp" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'PENDING',
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "Match_tripId_fkey" FOREIGN KEY ("tripId") REFERENCES "Trip" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        CONSTRAINT "Match_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "Request" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+    `);
 
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Match" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "tripId" TEXT NOT NULL,
-          "requestId" TEXT NOT NULL,
-          "otp" TEXT,
-          "status" TEXT NOT NULL DEFAULT 'PENDING',
-          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT "Match_tripId_fkey" FOREIGN KEY ("tripId") REFERENCES "Trip" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-          CONSTRAINT "Match_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "Request" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Notification" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "message" TEXT NOT NULL,
-          "link" TEXT,
-          "read" BOOLEAN NOT NULL DEFAULT false,
-          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
-        );
-      `);
-    } else {
-      // Create tables for SQLite if needed
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "User" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "name" TEXT NOT NULL,
-          "email" TEXT NOT NULL UNIQUE,
-          "passwordHash" TEXT NOT NULL,
-          "hostel" TEXT NOT NULL,
-          "roomNumber" TEXT,
-          "trustScore" INTEGER NOT NULL DEFAULT 0,
-          "role" TEXT NOT NULL DEFAULT 'STUDENT',
-          "redFlagged" BOOLEAN NOT NULL DEFAULT false,
-          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Outlet" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "name" TEXT NOT NULL UNIQUE,
-          "hasFixedMenu" BOOLEAN NOT NULL DEFAULT true,
-          "isClosed" BOOLEAN NOT NULL DEFAULT false
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "MenuItem" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "outletId" TEXT NOT NULL,
-          "name" TEXT NOT NULL,
-          "price" REAL NOT NULL,
-          FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id") ON DELETE CASCADE
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Trip" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "outletId" TEXT NOT NULL,
-          "leavingTime" DATETIME NOT NULL,
-          "status" TEXT NOT NULL DEFAULT 'ACTIVE',
-          "capacity" INTEGER,
-          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY ("userId") REFERENCES "User" ("id"),
-          FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id")
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Request" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "outletId" TEXT NOT NULL,
-          "itemName" TEXT NOT NULL,
-          "quantity" INTEGER NOT NULL DEFAULT 1,
-          "priceEstimate" REAL NOT NULL,
-          "deliverToHostel" TEXT NOT NULL,
-          "deliverToRoom" TEXT,
-          "note" TEXT,
-          "status" TEXT NOT NULL DEFAULT 'OPEN',
-          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY ("userId") REFERENCES "User" ("id"),
-          FOREIGN KEY ("outletId") REFERENCES "Outlet" ("id")
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Match" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "tripId" TEXT NOT NULL,
-          "requestId" TEXT NOT NULL,
-          "otp" TEXT,
-          "status" TEXT NOT NULL DEFAULT 'PENDING',
-          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY ("tripId") REFERENCES "Trip" ("id"),
-          FOREIGN KEY ("requestId") REFERENCES "Request" ("id")
-        );
-      `);
-
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "Notification" (
-          "id" TEXT NOT NULL PRIMARY KEY,
-          "userId" TEXT NOT NULL,
-          "message" TEXT NOT NULL,
-          "link" TEXT,
-          "read" BOOLEAN NOT NULL DEFAULT false,
-          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY ("userId") REFERENCES "User" ("id")
-        );
-      `);
-    }
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Notification" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "userId" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "link" TEXT,
+        "read" BOOLEAN NOT NULL DEFAULT false,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+    `);
 
     // Seed initial admin user if not exists
     const adminEmail = (process.env.ADMIN_EMAIL || "admin@campusrunner.com").toLowerCase();
-    const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
+    const adminPassword = process.env.ADMIN_PASSWORD || "Admin#CampusRunner9876!";
     const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
 
     if (!existingAdmin) {
       const adminHash = await bcrypt.hash(adminPassword, 10);
-      const adminUser = await prisma.user.create({
+      await prisma.user.create({
         data: {
           name: "Admin",
           email: adminEmail,
@@ -235,7 +136,6 @@ export async function ensureDbInitialized() {
           role: "ADMIN",
         },
       });
-      await saveUserToCloud(adminUser);
     }
 
     // Seed outlets if empty
@@ -285,66 +185,4 @@ export async function ensureDbInitialized() {
   } catch (error) {
     console.error("Database init error:", error);
   }
-}
-
-export async function saveUserToCloud(user: {
-  id: string;
-  name: string;
-  email: string;
-  passwordHash: string;
-  hostel: string;
-  roomNumber?: string | null;
-  role: string;
-}) {
-  try {
-    const key = `cr_user_${user.email.replace(/[^a-zA-Z0-9]/g, "_")}`;
-    await fetch("https://api.restful-api.dev/objects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: key,
-        data: user,
-      }),
-    });
-  } catch (err) {
-    console.error("Cloud user backup error:", err);
-  }
-}
-
-export async function findUserWithCloudSync(email: string) {
-  const cleanEmail = email.trim().toLowerCase();
-  await ensureDbInitialized();
-
-  let user = await prisma.user.findUnique({ where: { email: cleanEmail } });
-  if (user) return user;
-
-  // Search cloud backup store if missing in current serverless container
-  try {
-    const key = `cr_user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`;
-    const res = await fetch(`https://api.restful-api.dev/objects`, { method: "GET" });
-    if (res.ok) {
-      const items = await res.json();
-      const match = Array.isArray(items) ? items.find((i: any) => i.name === key) : null;
-      if (match?.data) {
-        const u = match.data;
-        user = await prisma.user.upsert({
-          where: { email: cleanEmail },
-          update: {},
-          create: {
-            id: u.id || `usr_${Date.now()}`,
-            name: u.name,
-            email: u.email,
-            passwordHash: u.passwordHash,
-            hostel: u.hostel,
-            roomNumber: u.roomNumber || null,
-            role: u.role || "STUDENT",
-          },
-        });
-      }
-    }
-  } catch (err) {
-    console.error("Cloud user restore error:", err);
-  }
-
-  return user;
 }

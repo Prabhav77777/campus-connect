@@ -1,12 +1,12 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { prisma, ensureDbInitialized, findUserWithCloudSync } from "./db";
+import { prisma, ensureDbInitialized } from "./db";
 import { authConfig } from "../auth.config";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...authConfig,
-  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "campus-runner-secret-key-32chars-long!",
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "rL9xP2wK7mQ4vN1zY8jF5tU3sA6eC0bX9dE8fG1hI2k=",
   providers: [
     Credentials({
       name: "Credentials",
@@ -21,7 +21,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           await ensureDbInitialized();
 
           const cleanEmail = (credentials.email as string).trim().toLowerCase();
-          const user = await findUserWithCloudSync(cleanEmail);
+          const user = await prisma.user.findUnique({
+            where: { email: cleanEmail },
+          });
 
           if (!user) return null;
 
